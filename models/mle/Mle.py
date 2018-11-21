@@ -9,7 +9,7 @@ from utils.metrics.Nll import Nll
 from utils.oracle.OracleLstm import OracleLstm
 from utils.utils import *
 
-def my_generate_samples(sess, trainable_model, batch_size, sequence_length, generate_num, output_file=None, get_code=True, g_x_file=None):
+def my_generate_samples(sess, trainable_model, batch_size, sequence_length, generate_num, output_file=None, get_code=False, g_x_file=None):
     # Generate Samples
     generated_samples = []
     data_loader = DataLoader(batch_size=batch_size, seq_length=sequence_length)
@@ -42,7 +42,7 @@ class Mle(Gan):
     def __init__(self, oracle=None):
         super().__init__()
         # you can change parameters, generator here
-        self.vocab_size = 30000
+        self.vocab_size = 17024
         self.emb_dim = 32
         self.hidden_dim = 32
         self.sequence_length = 20
@@ -170,37 +170,46 @@ class Mle(Gan):
         from utils.text_process import get_tokenlized
         wi_dict, iw_dict = self.init_real_trainng(data_loc)
 
+        def file_to_code(wi_dict=wi_dict, data_loc=None, seq_length=self.sequence_length):
+            tokens = get_tokenlized(data_loc)
+            out_path = data_loc.strip('.txt') + '_code.txt'
+            with open(out_path, 'w') as outfile:
+                outfile.write(text_to_code(tokens, wi_dict, seq_length))
+            return out_path
+        self.g_x_file = file_to_code(data_loc=self.g_x_file)
+
         def get_real_test_file(dict=iw_dict):
             with open(self.generator_file, 'r') as file:
                 codes = get_tokenlized(self.generator_file)
             with open(self.test_file, 'w') as outfile:
                 outfile.write(code_to_text(codes=codes, dictionary=dict))
 
-        # self.sess.run(tf.global_variables_initializer())
+        self.sess.run(tf.global_variables_initializer())
 
-        # self.pre_epoch_num = 30
-        # #self.adversarial_epoch_num = 100
-        # self.log = open('experiment-log-mle-real.csv', 'w')
-        # #my_generate_samples(self.sess, self.generator, self.batch_size, self.sequence_length, self.generate_num, self.generator_file, g_x_file=self.g_x_file)
-        # self.gen_data_loader.create_batches(self.oracle_file)
+        self.pre_epoch_num = 30
+        #self.adversarial_epoch_num = 100
+        self.log = open('experiment-log-mle-real.csv', 'w')
+        #my_generate_samples(self.sess, self.generator, self.batch_size, self.sequence_length, self.generate_num, self.generator_file, g_x_file=self.g_x_file)
+        self.gen_data_loader.create_batches(self.oracle_file)
 
-        # saver=tf.train.Saver(max_to_keep=1)
-        # print('start pre-train generator:')
-        # for epoch in range(self.pre_epoch_num):
-        #     saver.save(self.sess,'ckpt/lstm.ckpt',global_step=epoch)
-        #     start = time()
-        #     loss = pre_train_epoch(self.sess, self.generator, self.gen_data_loader)
-        #     end = time()
-        #     print('epoch:' + str(self.epoch) + '\t time:' + str(end - start))
-        #     self.add_epoch()
-        #     if epoch % 5 == 0:
-        #         #my_generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
-        #         #get_real_test_file()
-        #         #self.evaluate()
-        #         saver.save(self.sess,'ckpt/lstm.ckpt',global_step=epoch)
-        saver=tf.train.Saver(max_to_keep=1)
-        model_file=tf.train.latest_checkpoint('ckpt/')
-        saver.restore(self.sess, model_file)
+        saver=tf.train.Saver()
+        print('start pre-train generator:')
+        for epoch in range(self.pre_epoch_num):
+            saver.save(self.sess, 'ckpt/lstm.ckpt', global_step=epoch)
+            start = time()
+            loss = pre_train_epoch(self.sess, self.generator, self.gen_data_loader)
+            end = time()
+            print('epoch:' + str(self.epoch) + '\t time:' + str(end - start))
+            print(loss)
+            self.add_epoch()
+            if epoch % 5 == 0:
+                #my_generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
+                #get_real_test_file()
+                #self.evaluate()
+                saver.save(self.sess, 'ckpt/lstm.ckpt', global_step=epoch)
+        #saver=tf.train.Saver()
+        #model_file=tf.train.latest_checkpoint('ckpt/')
+        #saver.restore(self.sess, model_file)
         my_generate_samples(self.sess, self.generator, self.batch_size, self.sequence_length, self.generate_num, self.generator_file, g_x_file=self.g_x_file)
         get_real_test_file()
 

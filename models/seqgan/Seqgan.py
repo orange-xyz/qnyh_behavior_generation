@@ -19,7 +19,7 @@ class Seqgan(Gan):
     def __init__(self, oracle=None):
         super().__init__()
         # you can change parameters, generator here
-        self.vocab_size = 14994
+        self.vocab_size = 35000
         self.emb_dim = 32
         self.hidden_dim = 32
         self.sequence_length = 20
@@ -28,7 +28,7 @@ class Seqgan(Gan):
         self.l2_reg_lambda = 0.2
         self.dropout_keep_prob = 0.75
         self.batch_size = 64
-        self.generate_num = 128
+        self.generate_num = 2048
         self.start_token = 0
 
         self.oracle_file = 'models/seqgan/save/oracle.txt'
@@ -58,7 +58,6 @@ class Seqgan(Gan):
                 self.discriminator.input_y: y_batch,
             }
             loss,_ = self.sess.run([self.discriminator.d_loss, self.discriminator.train_op], feed)
-            print(loss)
 
     def evaluate(self):
         generate_samples(self.sess, self.generator, self.batch_size, self.generate_num, self.generator_file)
@@ -334,7 +333,7 @@ class Seqgan(Gan):
 
         self.reset_epoch()
         print('adversarial training:')
-        self.reward = Reward(self.generator, .8)
+        self.reward = Reward(self.generator, update_rate=0.8)
         for epoch in range(self.adversarial_epoch_num):
             # print('epoch:' + str(epoch))
             start = time()

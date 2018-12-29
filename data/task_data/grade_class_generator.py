@@ -2,8 +2,8 @@ import numpy as np
 out_grades_path = r'H:\qnyh\my_code\qnyh_lstm\data\task_data\\g_grades.txt'
 out_classes_path = r'H:\qnyh\my_code\qnyh_lstm\data\task_data\\g_classes.txt'
 
-grade_fixed = 20
-class_fixed = 2
+grade_fixed = 69
+class_fixed = 0
 generated_num = 2048
 sequence_length = 20
 

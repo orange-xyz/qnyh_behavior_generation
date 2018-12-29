@@ -27,6 +27,8 @@ class Generator(object):
             self.class_dim = 5
             self.num_grade = 90
             self.grade_dim = 5
+        
+        self.attention_size = 16
 
         self.expected_reward = tf.Variable(tf.zeros([self.sequence_length]))
 
@@ -41,6 +43,7 @@ class Generator(object):
                 self.g_params.append(self.grade_embeddings)
             self.g_recurrent_unit = self.create_recurrent_unit(self.g_params)  # maps h_tm1 to h_t for generator
             self.g_output_unit = self.create_output_unit(self.g_params)  # maps h_t to o_t (output token logits)
+            self.g_att_layer = self.create_attention(self.g_params)
 
         # placeholder definition
         self.x = tf.placeholder(tf.int32, shape=[self.batch_size,
@@ -88,32 +91,17 @@ class Generator(object):
                 dtype=tf.float32, size=self.sequence_length)
             ta_emb_context = ta_emb_context.unstack(self.processed_context)
 
-        # def attention(inputs, attention_size, hidden_size, return_alphas):
-        #     w_omega = tf.Variable(tf.random_normal([hidden_size, attention_size], stddev=0.1))
-        #     b_omega = tf.Variable(tf.random_normal([attention_size], stddev=0.1))
-        #     u_omega = tf.Variable(tf.random_normal([attention_size], stddev=0.1))
-        #     with tf.name_scope('v'):
-        #     # Applying fully connected layer with non-linear activation to each of the B*T timestamps;
-        #     #  the shape of `v` is (B,T,D)*(D,A)=(B,T,A), where A=attention_size
-        #     v = tf.tanh(tf.tensordot(inputs, w_omega, axes=1) + b_omega)
-        #     vu = tf.tensordot(v, u_omega, axes=1, name='vu')  # (B,T) shape
-        #     alphas = tf.nn.softmax(vu, name='alphas')         # (B,T) shape
-
-        #     # Output of (Bi-)RNN is reduced with attention vector; the result has (B,D) shape
-        #     output = tf.reduce_sum(inputs * tf.expand_dims(alphas, -1), 1)
-
-        #     if not return_alphas:
-        #         return output
-        #     else:
-        #         return output, alphas
-
-
-        def _g_recurrence(i, x_t, h_tm1, gen_o, gen_x):
+        def _g_recurrence(i, x_t, h_tm1, gen_o, gen_x, his):
             h_t = self.g_recurrent_unit(x_t, h_tm1)  # hidden_memory_tuple
-            #his = tf.concat([his, h_t], axis=0)
-            #attention_outputs = attention(his, attention_size=16, hidden_size=self.hidden_dim, return_alphas=False)
-            o_t = self.g_output_unit(h_t)  # batch x vocab , logits not prob
-            #o_t = self.g_output_unit(attention_outputs)  # batch x vocab , logits not prob
+            hidden_state, c_prev = tf.unstack(h_t)
+            #print('hidden_state shape %s'%hidden_state.get_shape())
+            his = tf.concat([his, tf.reshape(hidden_state, [self.batch_size, 1, self.hidden_dim])], axis=1)
+            #print('his %s'%his.get_shape())
+            attention_outputs = self.g_att_layer(his, return_alphas=False)
+            #print('attention shape %s'%attention_outputs.get_shape())
+            #o_t = self.g_output_unit(h_t)  # batch x vocab , logits not prob
+            o_t = self.g_output_unit(attention_outputs)  # batch x vocab , logits not prob
+            #print('o_t shape %s'%o_t.get_shape())
             log_prob = tf.log(tf.nn.softmax(o_t))
             # next_token = tf.cond(tf.less(i, 10), lambda: g_ta_emb_x.read(i), 
             #                      lambda: tf.cast(tf.reshape(tf.multinomial(log_prob, 1), [self.batch_size]), tf.int32))
@@ -126,24 +114,31 @@ class Generator(object):
             gen_o = gen_o.write(i, tf.reduce_sum(tf.multiply(tf.one_hot(next_token, self.num_vocabulary, 1.0, 0.0),
                                                              tf.nn.softmax(o_t)), 1))  # [batch_size] , prob
             gen_x = gen_x.write(i, next_token)  # indices, batch_size
-            return i + 1, x_tp1, h_t, gen_o, gen_x
+            return i + 1, x_tp1, h_t, gen_o, gen_x, his
 
         if(self.ADDDATA == True):
-            _, _, _, self.gen_o, self.gen_x = control_flow_ops.while_loop(
-                cond=lambda i, _1, _2, _3, _4: i < gen_length,
+            _, _, _, self.gen_o, self.gen_x, _ = control_flow_ops.while_loop(
+                cond=lambda i, _1, _2, _3, _4, _5: i < gen_length,
                 body=_g_recurrence,
                 loop_vars=(tf.constant(0, dtype=tf.int32),
                            tf.concat([tf.nn.embedding_lookup(self.g_embeddings, self.start_token), 
-                           tf.nn.embedding_lookup(self.class_embeddings, tf.constant([0] * self.batch_size, dtype=tf.int32)),
-                           tf.nn.embedding_lookup(self.grade_embeddings, tf.constant([69] * self.batch_size, dtype=tf.int32))], axis=1), 
-                           self.h0, gen_o, gen_x))
+                                       tf.nn.embedding_lookup(self.class_embeddings, tf.constant([0] * self.batch_size, dtype=tf.int32)),
+                                       tf.nn.embedding_lookup(self.grade_embeddings, tf.constant([69] * self.batch_size, dtype=tf.int32))], axis=1), 
+                           self.h0, gen_o, gen_x, tf.zeros([self.batch_size, 1, self.hidden_dim])), 
+                shape_invariants=(tf.TensorShape([]),
+                                   tf.TensorShape([self.batch_size, None]),
+                                   tf.TensorShape([2, self.batch_size, self.hidden_dim]),
+                                   tf.TensorShape([]),
+                                   tf.TensorShape([]),
+                                   tf.TensorShape([self.batch_size, None, self.hidden_dim])
+                                   ))
         else:
             _, _, _, self.gen_o, self.gen_x = control_flow_ops.while_loop(
-                cond=lambda i, _1, _2, _3, _4: i < gen_length,
+                cond=lambda i, _1, _2, _3, _4, _5: i < gen_length,
                 body=_g_recurrence,
                 loop_vars=(tf.constant(0, dtype=tf.int32),
                            tf.nn.embedding_lookup(self.g_embeddings, self.start_token),  
-                           self.h0, gen_o, gen_x))
+                           self.h0, gen_o, gen_x, tf.zeros([self.batch_size, 1, self.hidden_dim])))
 
         self.gen_x = self.gen_x.stack()  # seq_length x batch_size
         self.gen_x = tf.transpose(self.gen_x, perm=[1, 0])  # batch_size x seq_length
@@ -157,32 +152,51 @@ class Generator(object):
             dtype=tf.float32, size=self.sequence_length)
         ta_emb_x = ta_emb_x.unstack(self.processed_x)
 
-        def _pretrain_recurrence(i, x_t, h_tm1, g_predictions):
+        def _pretrain_recurrence(i, x_t, h_tm1, g_predictions, his):
             h_t = self.g_recurrent_unit(x_t, h_tm1)
-            o_t = self.g_output_unit(h_t)
+            hidden_state, c_prev = tf.unstack(h_t)
+            his = tf.concat([his, tf.reshape(hidden_state, [self.batch_size, 1, self.hidden_dim])], axis=1)
+            attention_outputs = self.g_att_layer(his, return_alphas=False)
+            #o_t = self.g_output_unit(h_t)
+            o_t = self.g_output_unit(attention_outputs)
             g_predictions = g_predictions.write(i, tf.nn.softmax(o_t))  # batch x vocab_size
             # x_tp1 = tf.cond(tf.cast(self.ADDDATA, tf.bool), lambda: tf.concat([ta_emb_x.read(i), ta_emb_context.read(i)], axis=1), 
             #                 lambda: ta_emb_x.read(i))
             x_tp1 = tf.concat([ta_emb_x.read(i), ta_emb_context.read(i)], axis=1)
             x_tp1 = tf.reshape(x_tp1, [self.batch_size, self.emb_dim])
-            return i + 1, x_tp1, h_t, g_predictions
+            return i + 1, x_tp1, h_t, g_predictions, his
 
-        if(self.ADDDATA == True):    
-            _, _, _, self.g_predictions = control_flow_ops.while_loop(
-                cond=lambda i, _1, _2, _3: i < self.sequence_length,
+        # if(self.ADDDATA == True):    
+        #     _, _, _, self.g_predictions = control_flow_ops.while_loop(
+        #         cond=lambda i, _1, _2, _3, _4: i < self.sequence_length,
+        #         body=_pretrain_recurrence,
+        #         loop_vars=(tf.constant(0, dtype=tf.int32),
+        #                    tf.concat([tf.nn.embedding_lookup(self.g_embeddings, self.start_token), 
+        #                    tf.nn.embedding_lookup(self.class_embeddings, tf.constant([0] * self.batch_size, dtype=tf.int32)),
+        #                    tf.nn.embedding_lookup(self.grade_embeddings, tf.constant([69] * self.batch_size, dtype=tf.int32))], axis=1),  
+        #                    self.h0, g_predictions, tf.zeros([self.batch_size, 1, self.hidden_dim])))
+        if(self.ADDDATA == True):
+            _, _, _, self.g_predictions, _ = control_flow_ops.while_loop(
+                cond=lambda i, _1, _2, _3, _4: i < self.sequence_length,
                 body=_pretrain_recurrence,
                 loop_vars=(tf.constant(0, dtype=tf.int32),
                            tf.concat([tf.nn.embedding_lookup(self.g_embeddings, self.start_token), 
-                           tf.nn.embedding_lookup(self.class_embeddings, tf.constant([0] * self.batch_size, dtype=tf.int32)),
-                           tf.nn.embedding_lookup(self.grade_embeddings, tf.constant([69] * self.batch_size, dtype=tf.int32))], axis=1),  
-                           self.h0, g_predictions))
+                                       tf.nn.embedding_lookup(self.class_embeddings, tf.constant([0] * self.batch_size, dtype=tf.int32)),
+                                       tf.nn.embedding_lookup(self.grade_embeddings, tf.constant([69] * self.batch_size, dtype=tf.int32))], axis=1), 
+                           self.h0, g_predictions, tf.zeros([self.batch_size, 1, self.hidden_dim])), 
+                shape_invariants=(tf.TensorShape([]),
+                                   tf.TensorShape([self.batch_size, None]),
+                                   tf.TensorShape([2, self.batch_size, self.hidden_dim]),
+                                   tf.TensorShape([]),
+                                   tf.TensorShape([self.batch_size, None, self.hidden_dim])
+                                   ))        
         else:
             _, _, _, self.g_predictions = control_flow_ops.while_loop(
-                cond=lambda i, _1, _2, _3: i < self.sequence_length,
+                cond=lambda i, _1, _2, _3, _4: i < self.sequence_length,
                 body=_pretrain_recurrence,
                 loop_vars=(tf.constant(0, dtype=tf.int32),
                            tf.nn.embedding_lookup(self.g_embeddings, self.start_token), 
-                           self.h0, g_predictions))
+                           self.h0, g_predictions, tf.zeros([self.batch_size, 1, self.hidden_dim])))
 
         self.g_predictions = tf.transpose(self.g_predictions.stack(),
                                           perm=[1, 0, 2])  # batch_size x seq_length x vocab_size
@@ -298,11 +312,36 @@ class Generator(object):
         params.extend([self.Wo, self.bo])
 
         def unit(hidden_memory_tuple):
-            hidden_state, c_prev = tf.unstack(hidden_memory_tuple)
+            #hidden_state, c_prev = tf.unstack(hidden_memory_tuple)
+            hidden_state = hidden_memory_tuple
             logits = tf.matmul(hidden_state, self.Wo) + self.bo
             return logits
 
         return unit
+
+    def create_attention(self, params):
+        self.w_omega = tf.Variable(tf.random_normal([self.hidden_dim, self.attention_size], stddev=0.1))
+        self.b_omega = tf.Variable(tf.random_normal([self.attention_size], stddev=0.1))
+        self.u_omega = tf.Variable(tf.random_normal([self.attention_size], stddev=0.1))
+        params.extend([self.w_omega, self.b_omega, self.u_omega])
+
+        def att_layer(inputs, return_alphas):
+            with tf.name_scope('v'):
+                # Applying fully connected layer with non-linear activation to each of the B*T timestamps;
+                #  the shape of `v` is (B,T,D)*(D,A)=(B,T,A), where A=attention_size
+                v = tf.tanh(tf.tensordot(inputs, self.w_omega, axes=1) + self.b_omega)
+            vu = tf.tensordot(v, self.u_omega, axes=1, name='vu')  # (B,T) shape
+            alphas = tf.nn.softmax(vu, name='alphas')         # (B,T) shape
+
+            # Output of (Bi-)RNN is reduced with attention vector; the result has (B,D) shape
+            output = tf.reduce_sum(inputs * tf.expand_dims(alphas, -1), 1)
+
+            if not return_alphas:
+                return output
+            else:
+                return output, alphas
+        
+        return att_layer
 
     def g_optimizer(self, *args, **kwargs):
         return tf.train.AdamOptimizer(*args, **kwargs)
